@@ -168,12 +168,18 @@ except ImportError:
             ), "number of dimensions should be a multiple of two"
             D = tokens.size(3) // 2
             assert positions.ndim == 3 and positions.shape[-1] == 2  # Batch, Seq, 2
+            # Get max position value properly (handle GPU tensors)
+            max_pos = positions.max().item() if positions.max().numel() == 1 else int(positions.max())
             cos, sin = self.get_cos_sin(
-                D, int(positions.max()) + 1, tokens.device, tokens.dtype
+                D, int(max_pos) + 1, tokens.device, tokens.dtype
             )
             # split features into two along the feature dimension, and apply rope1d on each half
             y, x = tokens.chunk(2, dim=-1)
-            y = self.apply_rope1d(y, positions[:, :, 0], cos, sin)
-            x = self.apply_rope1d(x, positions[:, :, 1], cos, sin)
+            # Clamp positions to valid range to avoid index out of bounds
+            max_valid_pos = cos.shape[0] - 1
+            y_pos = torch.clamp(positions[:, :, 0], 0, max_valid_pos)
+            x_pos = torch.clamp(positions[:, :, 1], 0, max_valid_pos)
+            y = self.apply_rope1d(y, y_pos, cos, sin)
+            x = self.apply_rope1d(x, x_pos, cos, sin)
             tokens = torch.cat((y, x), dim=-1)
             return tokens
