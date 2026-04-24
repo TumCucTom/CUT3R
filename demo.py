@@ -29,6 +29,9 @@ import shutil
 from copy import deepcopy
 from add_ckpt_path import add_path_to_dust3r
 import imageio.v2 as iio
+import subprocess
+from gsplat import rasterization
+import numpy as np
 
 # Set random seed for reproducibility.
 random.seed(42)
@@ -74,6 +77,29 @@ def parse_args():
         type=str,
         default="./demo_tmp",
         help="value for tempfile.tempdir",
+    )
+    parser.add_argument(
+        "--output_video",
+        action="store_true",
+        help="If set, render a turntable video instead of launching the interactive viewer.",
+    )
+    parser.add_argument(
+        "--orbit_frames",
+        type=int,
+        default=120,
+        help="Number of frames in the turntable video.",
+    )
+    parser.add_argument(
+        "--video_fps",
+        type=int,
+        default=12,
+        help="FPS for the output video.",
+    )
+    parser.add_argument(
+        "--orbit_radius",
+        type=float,
+        default=2.0,
+        help="Orbit radius for the turntable camera.",
     )
 
     return parser.parse_args()
@@ -321,6 +347,80 @@ def parse_seq_path(p):
     return img_paths, tmpdirname
 
 
+def generate_orbit_path(cam_dict, num_frames, radius=2.0):
+    """Generate a camera orbit path around the scene centroid."""
+    pts3d = cam_dict.get("pts3d", None)
+    if pts3d is not None:
+        centroid = pts3d.reshape(-1, 3).mean(axis=0)
+    else:
+        t = cam_dict["t"]
+        centroid = t.mean(axis=0)
+
+    radius = float(radius)
+    angles = np.linspace(0, 2 * np.pi, num_frames, endpoint=False)
+
+    cam_path = []
+    for angle in angles:
+        x = centroid[0] + radius * np.cos(angle)
+        z = centroid[2] + radius * np.sin(angle)
+        pos = np.array([x, centroid[1], z])
+
+        direction = centroid - pos
+        direction = direction / np.linalg.norm(direction)
+        up = np.array([0.0, 1.0, 0.0])
+        right = np.cross(up, direction)
+        right = right / np.linalg.norm(right)
+        up = np.cross(direction, right)
+
+        R = np.column_stack([right, up, direction])
+        c2w = np.eye(4)
+        c2w[:3, :3] = R
+        c2w[:3, 3] = pos
+        cam_path.append(c2w)
+    return cam_path
+
+
+def render_orbit_frame(pts3d, colors, conf, cam_dict, c2w, size=512):
+    """Render a single frame from a given camera pose using gsplat."""
+    intrinsics = np.eye(3)
+    intrinsics[0, 0] = cam_dict["focal"][0]
+    intrinsics[1, 1] = cam_dict["focal"][0]
+    intrinsics[0, 2] = cam_dict["pp"][0][0]
+    intrinsics[1, 2] = cam_dict["pp"][0][1]
+    K = torch.from_numpy(intrinsics).float().unsqueeze(0)
+
+    pts = pts3d.reshape(-1, 3)
+    mask = conf.reshape(-1) > 1.0
+    pts = pts[mask]
+    cols = colors.reshape(-1, 3)[mask]
+
+    num_pts = len(pts)
+    if num_pts == 0:
+        return np.zeros((size, size, 3), dtype=np.uint8)
+
+    quats = torch.randn((num_pts, 4))
+    quats = quats / quats.norm(dim=-1, keepdim=True)
+    scales = 0.002 * torch.ones((num_pts, 3))
+    opacities = 0.95 * torch.ones((num_pts,))
+
+    rgbd, acc, _ = rasterization(
+        pts.float().cuda(),
+        quats.float().cuda(),
+        scales.float().cuda(),
+        opacities.float().cuda(),
+        cols.float().cuda(),
+        torch.from_numpy(c2w).float().unsqueeze(0).cuda(),
+        K.float().unsqueeze(0).cuda(),
+        width=size,
+        height=size,
+        packed=False,
+        render_mode="RGB+D",
+    )
+    rgb = rgbd[0, ..., :3].cpu().numpy()
+    rgb = np.clip(rgb, 0, 1)
+    return (rgb * 255).astype(np.uint8)
+
+
 def run_inference(args):
     """
     Execute the full inference and visualization pipeline.
@@ -340,7 +440,9 @@ def run_inference(args):
     # Import model and inference functions after adding the ckpt path.
     from src.dust3r.inference import inference, inference_recurrent
     from src.dust3r.model import ARCroco3DStereo
-    from viser_utils import PointCloudViewer
+
+    if not args.output_video:
+        from viser_utils import PointCloudViewer
 
     # Prepare image file paths.
     img_paths, tmpdirname = parse_seq_path(args.seq_path)
@@ -388,6 +490,40 @@ def run_inference(args):
     pts3ds_to_vis = [p.cpu().numpy() for p in pts3ds_other]
     colors_to_vis = [c.cpu().numpy() for c in colors]
     edge_colors = [None] * len(pts3ds_to_vis)
+
+    if args.output_video:
+        print(f"Rendering {args.orbit_frames}-frame turntable video...")
+        cam_path = generate_orbit_path(cam_dict, args.orbit_frames, args.orbit_radius)
+        frame_dir = os.path.join(args.output_dir, "frames")
+        os.makedirs(frame_dir, exist_ok=True)
+
+        pts3d_np = pts3ds_other[0].cpu().numpy()
+        colors_np = colors[0].cpu().numpy()
+        conf_np = conf[0].cpu().numpy()
+
+        for i, c2w in enumerate(cam_path):
+            frame = render_orbit_frame(pts3d_np, colors_np, conf_np, cam_dict, c2w, size=args.size)
+            iio.imwrite(os.path.join(frame_dir, f"frame_{i:04d}.png"), frame)
+            if (i + 1) % 20 == 0:
+                print(f"  Frame {i+1}/{args.orbit_frames}")
+
+        video_path = os.path.join(args.output_dir, "reconstruction.mp4")
+        ffmpeg_cmd = [
+            "ffmpeg", "-y",
+            "-framerate", str(args.video_fps),
+            "-i", os.path.join(frame_dir, "frame_%04d.png"),
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
+            "-crf", "18",
+            video_path
+        ]
+        result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            print(f"Video saved to {video_path}")
+        else:
+            print(f"ffmpeg failed: {result.stderr}")
+        print("Video rendering complete.")
+        return
 
     # Create and run the point cloud viewer.
     print("Launching point cloud viewer...")
