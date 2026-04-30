@@ -347,14 +347,12 @@ def parse_seq_path(p):
     return img_paths, tmpdirname
 
 
-def generate_orbit_path(cam_dict, num_frames, radius=2.0):
+def generate_orbit_path(pts3ds_all, num_frames, radius=2.0):
     """Generate a camera orbit path around the scene centroid."""
-    pts3d = cam_dict.get("pts3d", None)
-    if pts3d is not None:
-        centroid = pts3d.reshape(-1, 3).mean(axis=0)
-    else:
-        t = cam_dict["t"]
-        centroid = t.mean(axis=0)
+    # Use ALL frames concatenated to get the true scene centroid
+    pts3d_np = torch.cat([p.cpu() for p in pts3ds_all], 0).numpy()
+    centroid = pts3d_np.reshape(-1, 3).mean(axis=0)
+    centroid = centroid.astype(float)
 
     radius = float(radius)
     angles = np.linspace(0, 2 * np.pi, num_frames, endpoint=False)
@@ -493,13 +491,14 @@ def run_inference(args):
 
     if args.output_video:
         print(f"Rendering {args.orbit_frames}-frame turntable video...")
-        cam_path = generate_orbit_path(cam_dict, args.orbit_frames, args.orbit_radius)
+        cam_path = generate_orbit_path(pts3ds_other, args.orbit_frames, args.orbit_radius)
         frame_dir = os.path.join(args.output_dir, "frames")
         os.makedirs(frame_dir, exist_ok=True)
 
-        pts3d_np = pts3ds_other[0].cpu().numpy()
-        colors_np = colors[0].cpu().numpy()
-        conf_np = conf[0].cpu().numpy()
+        # Concatenate ALL frames into a single global point cloud
+        pts3d_np = torch.cat([p.cpu() for p in pts3ds_other], 0).numpy()
+        colors_np = torch.cat([c.cpu() for c in colors], 0).numpy()
+        conf_np = torch.cat([c.cpu() for c in conf], 0).numpy()
 
         for i, c2w in enumerate(cam_path):
             frame = render_orbit_frame(pts3d_np, colors_np, conf_np, c2w, size=args.size)
