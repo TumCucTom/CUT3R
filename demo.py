@@ -404,7 +404,7 @@ def render_orbit_frame(pts3d, colors, conf, cam_dict, c2w, size=512):
     opacities = 0.95 * torch.ones((num_pts,))
 
     rgbd, acc, _ = rasterization(
-        pts.float().cuda(),
+        torch.from_numpy(pts).float().cuda(),
         quats.float().cuda(),
         scales.float().cuda(),
         opacities.float().cuda(),
