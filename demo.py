@@ -30,8 +30,11 @@ from copy import deepcopy
 from add_ckpt_path import add_path_to_dust3r
 import imageio.v2 as iio
 import subprocess
-from gsplat import rasterization
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 
 # Set random seed for reproducibility.
 random.seed(42)
@@ -381,52 +384,63 @@ def generate_orbit_path(cam_dict, num_frames, radius=2.0):
 
 
 def render_orbit_frame(pts3d, colors, conf, cam_dict, c2w, size=512):
-    """Render a single frame from a given camera pose using gsplat."""
-    intrinsics = np.eye(3)
-    intrinsics[0, 0] = cam_dict["focal"][0]
-    intrinsics[1, 1] = cam_dict["focal"][0]
-    intrinsics[0, 2] = cam_dict["pp"][0][0]
-    intrinsics[1, 2] = cam_dict["pp"][0][1]
+    """Render a single frame from a given camera pose using simple perspective projection."""
+    from mpl_toolkits.mplot3d import Axes3D
 
     pts = pts3d.reshape(-1, 3)
     mask = conf.reshape(-1) > 1.0
     pts = pts[mask]
     cols = colors.reshape(-1, 3)[mask]
 
-    num_pts = len(pts)
-    if num_pts == 0:
+    if len(pts) == 0:
         return np.zeros((size, size, 3), dtype=np.uint8)
 
-    quats = torch.randn((num_pts, 4))
-    quats = quats / quats.norm(dim=-1, keepdim=True)
-    scales = 0.002 * torch.ones((num_pts, 3))
-    opacities = 0.95 * torch.ones((num_pts,))
+    R = c2w[:3, :3]
+    t = c2w[:3, 3]
+    pts_cam = (R.T @ (pts - t).T).T
+    in_front = pts_cam[:, 2] > 0.01
+    pts_cam = pts_cam[in_front]
+    cols = cols[in_front]
 
-    # Build proper gsplat inputs: [1, Cameras, 3, 3]
-    K_batch = torch.from_numpy(intrinsics).float().unsqueeze(0).unsqueeze(0).cuda()  # [1, 1, 3, 3]
-    viewmat_batch = torch.from_numpy(c2w).float().unsqueeze(0).unsqueeze(0).cuda()  # [1, 1, 4, 4]
-    means_batch = torch.from_numpy(pts).float().cuda().unsqueeze(0)  # [1, N, 3]
-    colors_batch = torch.from_numpy(cols).float().cuda().unsqueeze(0)  # [1, N, 3]
-    scales_batch = scales.cuda().unsqueeze(0)  # [1, N, 3]
-    opacities_batch = opacities.cuda().unsqueeze(0)  # [1, N]
-    quats_batch = quats.float().cuda().unsqueeze(0)  # [1, N, 4]
+    if len(pts_cam) == 0:
+        return np.zeros((size, size, 3), dtype=np.uint8)
 
-    rgbd, acc, _ = rasterization(
-        means_batch,
-        quats_batch,
-        scales_batch,
-        opacities_batch,
-        colors_batch,
-        viewmat_batch,
-        K_batch,
-        width=size,
-        height=size,
-        packed=False,
-        render_mode="RGB+D",
-    )
-    rgb = rgbd[0, 0, ..., :3].cpu().numpy()
-    rgb = np.clip(rgb, 0, 1)
-    return (rgb * 255).astype(np.uint8)
+    fov = 60.0
+    fov_rad = np.radians(fov / 2)
+    scale = 1.0 / np.tan(fov_rad)
+    focal = size / 2 * scale
+
+    u = (pts_cam[:, 0] / pts_cam[:, 2] * focal + size / 2).astype(int)
+    v = (-pts_cam[:, 1] / pts_cam[:, 2] * focal + size / 2).astype(int)
+
+    valid = (u >= 0) & (u < size) & (v >= 0) & (v < size)
+
+    fig = matplotlib.figure.Figure(figsize=(size / 100, size / 100), dpi=100)
+    ax = fig.add_subplot(111, projection="3d")
+    ax.set_xlim(0, size)
+    ax.set_ylim(0, size)
+    ax.set_aspect("equal")
+    ax.invert_yaxis()
+    ax.axis("off")
+
+    depths = pts_cam[:, 2]
+    order = np.argsort(depths)[::-1]
+
+    for i in order:
+        px, py = u[i], v[i]
+        if valid[i]:
+            ax.scatter(px, py, s=2, c=cols[i], animated=False)
+
+    ax.set_xlim(0, size)
+    ax.set_ylim(0, size)
+    ax.axis("off")
+    fig.tight_layout(pad=0)
+
+    fig.canvas.draw()
+    buf = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+    buf = buf.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+    matplotlib.pyplot.close(fig)
+    return buf
 
 
 def run_inference(args):
