@@ -355,7 +355,7 @@ def generate_orbit_path(pts3ds_all, num_frames, radius=2.0):
     centroid = centroid.astype(float)
 
     radius = float(radius)
-    angles = np.linspace(0, 2 * np.pi, num_frames, endpoint=False)
+    angles = np.linspace(0, 2 * np.pi, num_frames, endpoint=False) + np.pi / 2
 
     cam_path = []
     for angle in angles:
