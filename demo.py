@@ -101,6 +101,12 @@ def parse_args():
         default=2.0,
         help="Orbit radius for the turntable camera.",
     )
+    parser.add_argument(
+        "--right_offset",
+        type=float,
+        default=1.0,
+        help="Displacement to the right from the centroid at orbit start.",
+    )
 
     return parser.parse_args()
 
@@ -347,21 +353,20 @@ def parse_seq_path(p):
     return img_paths, tmpdirname
 
 
-def generate_orbit_path(pts3ds_all, num_frames, radius=2.0):
+def generate_orbit_path(pts3ds_all, num_frames, radius=2.0, right_offset=1.0):
     """Generate a camera orbit path around the scene centroid."""
-    # Use ALL frames concatenated to get the true scene centroid
     pts3d_np = torch.cat([p.cpu() for p in pts3ds_all], 0).numpy()
     centroid = pts3d_np.reshape(-1, 3).mean(axis=0)
     centroid = centroid.astype(float)
 
     radius = float(radius)
-    angles = np.linspace(0, 2 * np.pi, num_frames, endpoint=False) + np.pi / 2
+    angles = np.linspace(0, 2 * np.pi, num_frames, endpoint=False)
 
     cam_path = []
     for angle in angles:
         x = centroid[0] + radius * np.cos(angle)
         z = centroid[2] + radius * np.sin(angle)
-        pos = np.array([x, centroid[1], z])
+        pos = np.array([x + right_offset, centroid[1], z])
 
         direction = centroid - pos
         direction = direction / np.linalg.norm(direction)
@@ -491,7 +496,7 @@ def run_inference(args):
 
     if args.output_video:
         print(f"Rendering {args.orbit_frames}-frame turntable video...")
-        cam_path = generate_orbit_path(pts3ds_other, args.orbit_frames, args.orbit_radius)
+        cam_path = generate_orbit_path(pts3ds_other, args.orbit_frames, args.orbit_radius, args.right_offset)
         frame_dir = os.path.join(args.output_dir, "frames")
         os.makedirs(frame_dir, exist_ok=True)
 

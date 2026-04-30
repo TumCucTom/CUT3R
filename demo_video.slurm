@@ -41,6 +41,7 @@ python demo.py \
     --orbit_frames 120 \
     --video_fps 12 \
     --orbit_radius 2.0 \
+    --right_offset 1.0 \
     --size 512
 
 echo "End Time: $(date)"
