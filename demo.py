@@ -405,7 +405,7 @@ def render_orbit_frame(pts3d, colors, conf, c2w, size=512):
     focal = size / 2 / np.tan(fov_rad)
 
     u = (pts_cam[:, 0] / pts_cam[:, 2] * focal + size / 2).astype(int)
-    v = (-pts_cam[:, 1] / pts_cam[:, 2] * focal + size / 2).astype(int)
+    v = (pts_cam[:, 1] / pts_cam[:, 2] * focal + size / 2).astype(int)
 
     valid = (u >= 0) & (u < size) & (v >= 0) & (v < size)
 
