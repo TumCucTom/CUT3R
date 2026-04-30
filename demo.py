@@ -31,10 +31,7 @@ from add_ckpt_path import add_path_to_dust3r
 import imageio.v2 as iio
 import subprocess
 import numpy as np
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
+from PIL import Image
 
 # Set random seed for reproducibility.
 random.seed(42)
@@ -383,10 +380,8 @@ def generate_orbit_path(cam_dict, num_frames, radius=2.0):
     return cam_path
 
 
-def render_orbit_frame(pts3d, colors, conf, cam_dict, c2w, size=512):
-    """Render a single frame from a given camera pose using simple perspective projection."""
-    from mpl_toolkits.mplot3d import Axes3D
-
+def render_orbit_frame(pts3d, colors, conf, c2w, size=512):
+    """Render a single frame from a given camera pose using PIL-based projection."""
     pts = pts3d.reshape(-1, 3)
     mask = conf.reshape(-1) > 1.0
     pts = pts[mask]
@@ -407,40 +402,23 @@ def render_orbit_frame(pts3d, colors, conf, cam_dict, c2w, size=512):
 
     fov = 60.0
     fov_rad = np.radians(fov / 2)
-    scale = 1.0 / np.tan(fov_rad)
-    focal = size / 2 * scale
+    focal = size / 2 / np.tan(fov_rad)
 
     u = (pts_cam[:, 0] / pts_cam[:, 2] * focal + size / 2).astype(int)
     v = (-pts_cam[:, 1] / pts_cam[:, 2] * focal + size / 2).astype(int)
 
     valid = (u >= 0) & (u < size) & (v >= 0) & (v < size)
 
-    fig = matplotlib.figure.Figure(figsize=(size / 100, size / 100), dpi=100)
-    ax = fig.add_subplot(111, projection="3d")
-    ax.set_xlim(0, size)
-    ax.set_ylim(0, size)
-    ax.set_aspect("equal")
-    ax.invert_yaxis()
-    ax.axis("off")
+    img = np.full((size, size, 3), 255, dtype=np.uint8)
 
     depths = pts_cam[:, 2]
     order = np.argsort(depths)[::-1]
 
     for i in order:
-        px, py = u[i], v[i]
         if valid[i]:
-            ax.scatter(px, py, s=2, c=cols[i], animated=False)
+            img[v[i], u[i]] = (cols[i] * 255).astype(np.uint8)
 
-    ax.set_xlim(0, size)
-    ax.set_ylim(0, size)
-    ax.axis("off")
-    fig.tight_layout(pad=0)
-
-    fig.canvas.draw()
-    buf = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-    buf = buf.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-    matplotlib.pyplot.close(fig)
-    return buf
+    return img
 
 
 def run_inference(args):
@@ -524,7 +502,7 @@ def run_inference(args):
         conf_np = conf[0].cpu().numpy()
 
         for i, c2w in enumerate(cam_path):
-            frame = render_orbit_frame(pts3d_np, colors_np, conf_np, cam_dict, c2w, size=args.size)
+            frame = render_orbit_frame(pts3d_np, colors_np, conf_np, c2w, size=args.size)
             iio.imwrite(os.path.join(frame_dir, f"frame_{i:04d}.png"), frame)
             if (i + 1) % 20 == 0:
                 print(f"  Frame {i+1}/{args.orbit_frames}")
