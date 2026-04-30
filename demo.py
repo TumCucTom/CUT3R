@@ -387,7 +387,6 @@ def render_orbit_frame(pts3d, colors, conf, cam_dict, c2w, size=512):
     intrinsics[1, 1] = cam_dict["focal"][0]
     intrinsics[0, 2] = cam_dict["pp"][0][0]
     intrinsics[1, 2] = cam_dict["pp"][0][1]
-    K = torch.from_numpy(intrinsics).float().unsqueeze(0).unsqueeze(0)  # [1, 1, 3, 3]
 
     pts = pts3d.reshape(-1, 3)
     mask = conf.reshape(-1) > 1.0
@@ -403,20 +402,29 @@ def render_orbit_frame(pts3d, colors, conf, cam_dict, c2w, size=512):
     scales = 0.002 * torch.ones((num_pts, 3))
     opacities = 0.95 * torch.ones((num_pts,))
 
+    # Build proper gsplat inputs: [1, Cameras, 3, 3]
+    K_batch = torch.from_numpy(intrinsics).float().unsqueeze(0).unsqueeze(0).cuda()  # [1, 1, 3, 3]
+    viewmat_batch = torch.from_numpy(c2w).float().unsqueeze(0).unsqueeze(0).cuda()  # [1, 1, 4, 4]
+    means_batch = torch.from_numpy(pts).float().cuda().unsqueeze(0)  # [1, N, 3]
+    colors_batch = torch.from_numpy(cols).float().cuda().unsqueeze(0)  # [1, N, 3]
+    scales_batch = scales.cuda().unsqueeze(0)  # [1, N, 3]
+    opacities_batch = opacities.cuda().unsqueeze(0)  # [1, N]
+    quats_batch = quats.float().cuda().unsqueeze(0)  # [1, N, 4]
+
     rgbd, acc, _ = rasterization(
-        torch.from_numpy(pts).float().cuda(),
-        quats.float().cuda(),
-        scales.float().cuda(),
-        opacities.float().cuda(),
-        torch.from_numpy(cols).float().cuda(),
-        torch.from_numpy(c2w).float().unsqueeze(0).cuda(),
-        K.float().unsqueeze(0).cuda(),
+        means_batch,
+        quats_batch,
+        scales_batch,
+        opacities_batch,
+        colors_batch,
+        viewmat_batch,
+        K_batch,
         width=size,
         height=size,
         packed=False,
         render_mode="RGB+D",
     )
-    rgb = rgbd[0, ..., :3].cpu().numpy()
+    rgb = rgbd[0, 0, ..., :3].cpu().numpy()
     rgb = np.clip(rgb, 0, 1)
     return (rgb * 255).astype(np.uint8)
 
