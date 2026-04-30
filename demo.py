@@ -387,7 +387,7 @@ def render_orbit_frame(pts3d, colors, conf, cam_dict, c2w, size=512):
     intrinsics[1, 1] = cam_dict["focal"][0]
     intrinsics[0, 2] = cam_dict["pp"][0][0]
     intrinsics[1, 2] = cam_dict["pp"][0][1]
-    K = torch.from_numpy(intrinsics).float().unsqueeze(0)
+    K = torch.from_numpy(intrinsics).float().unsqueeze(0).unsqueeze(0)  # [1, 1, 3, 3]
 
     pts = pts3d.reshape(-1, 3)
     mask = conf.reshape(-1) > 1.0
