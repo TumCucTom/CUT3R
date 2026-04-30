@@ -408,7 +408,7 @@ def render_orbit_frame(pts3d, colors, conf, cam_dict, c2w, size=512):
         quats.float().cuda(),
         scales.float().cuda(),
         opacities.float().cuda(),
-        cols.float().cuda(),
+        torch.from_numpy(cols).float().cuda(),
         torch.from_numpy(c2w).float().unsqueeze(0).cuda(),
         K.float().unsqueeze(0).cuda(),
         width=size,
